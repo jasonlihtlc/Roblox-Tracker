@@ -1,0 +1,36 @@
+-- StarterPlayerScripts/Announcer (LocalScript)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local TextChatService = game:GetService("TextChatService")
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 60)
+if not remotes then return end
+local announceRE = remotes:WaitForChild("Announce", 60)
+if not announceRE then return end
+
+local function showClassicChatMessage(text, color)
+	pcall(function()
+		StarterGui:SetCore("ChatMakeSystemMessage", {
+			Text = text,
+			Color = color or Color3.new(1,1,1),
+		})
+	end)
+end
+
+local function showTextChatServiceMessage(text)
+	if TextChatService and TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+		local channels = TextChatService:WaitForChild("TextChannels")
+		local general = channels:FindFirstChild("RBXGeneral")
+		if general then
+			general:DisplaySystemMessage(text)
+			return true
+		end
+	end
+	return false
+end
+
+announceRE.OnClientEvent:Connect(function(text, color)
+	if not showTextChatServiceMessage(text) then
+		showClassicChatMessage(text, color)
+	end
+end)
