@@ -1,0 +1,144 @@
+-- StarterPlayerScripts/ColorPicker (LocalScript, palette picker)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 60)
+if not remotes then return end
+local colorChoiceRE = remotes:WaitForChild("ColorChoice", 60)
+if not colorChoiceRE then return end
+
+-- UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "ColorPicker"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local panel = Instance.new("Frame")
+panel.Name = "PalettePanel"
+panel.AnchorPoint = Vector2.new(1, 1)
+panel.Position = UDim2.new(1, -12, 1, -12)
+panel.Size = UDim2.fromOffset(320, 210)
+panel.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+panel.BackgroundTransparency = 0.05
+panel.BorderSizePixel = 0
+panel.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = panel
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 10)
+padding.PaddingBottom = UDim.new(0, 10)
+padding.PaddingLeft = UDim.new(0, 10)
+padding.PaddingRight = UDim.new(0, 10)
+padding.Parent = panel
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 24)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.Text = "Pick a Color"
+title.TextScaled = true
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.Parent = panel
+
+-- Selected swatch row
+local selRow = Instance.new("Frame")
+selRow.Size = UDim2.new(1, 0, 0, 28)
+selRow.Position = UDim2.new(0, 0, 0, 28)
+selRow.BackgroundTransparency = 1
+selRow.Parent = panel
+
+local selLabel = Instance.new("TextLabel")
+selLabel.BackgroundTransparency = 1
+selLabel.Text = "Selected"
+selLabel.TextScaled = true
+selLabel.Font = Enum.Font.Gotham
+selLabel.TextXAlignment = Enum.TextXAlignment.Left
+selLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+selLabel.Size = UDim2.new(1, -40, 1, 0)
+selLabel.Parent = selRow
+
+local selSwatch = Instance.new("Frame")
+selSwatch.Size = UDim2.fromOffset(28, 28)
+selSwatch.AnchorPoint = Vector2.new(1, 0.5)
+selSwatch.Position = UDim2.new(1, 0, 0.5, 0)
+selSwatch.BackgroundColor3 = Color3.fromRGB(200,200,200)
+selSwatch.BorderSizePixel = 0
+selSwatch.Parent = selRow
+local selCorner = Instance.new("UICorner")
+selCorner.CornerRadius = UDim.new(0, 6)
+selCorner.Parent = selSwatch
+
+-- Grid container
+local gridContainer = Instance.new("Frame")
+gridContainer.BackgroundTransparency = 1
+gridContainer.Position = UDim2.new(0, 0, 0, 60)
+gridContainer.Size = UDim2.new(1, 0, 1, -60)
+gridContainer.Parent = panel
+
+local layout = Instance.new("UIGridLayout")
+layout.Parent = gridContainer
+layout.CellSize = UDim2.fromOffset(28, 28)
+layout.CellPadding = UDim2.fromOffset(6, 6)
+layout.FillDirectionMaxCells = 10
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+layout.VerticalAlignment = Enum.VerticalAlignment.Top
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Build a nice palette (rainbow hues + pastels + grayscale)
+local swatches = {}
+
+local function addSwatch(color: Color3)
+	local btn = Instance.new("TextButton")
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.BackgroundColor3 = color
+	btn.BorderSizePixel = 0
+	btn.Parent = gridContainer
+	btn.LayoutOrder = #swatches + 1
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = btn
+	table.insert(swatches, btn)
+
+	btn.MouseButton1Click:Connect(function()
+		selSwatch.BackgroundColor3 = color
+		colorChoiceRE:FireServer(color) -- send Color3 to server
+	end)
+end
+
+-- Rainbow ring (12 hues) at full V, high S
+for i = 0, 11 do
+	local h = i / 12
+	addSwatch(Color3.fromHSV(h, 0.85, 1))
+end
+-- Mid-sat variants
+for i = 0, 11 do
+	local h = i / 12
+	addSwatch(Color3.fromHSV(h, 0.55, 1))
+end
+-- Pastels
+for i = 0, 11 do
+	local h = i / 12
+	addSwatch(Color3.fromHSV(h, 0.35, 1))
+end
+-- Grayscale
+for v = 0, 10 do
+	local val = v / 10
+	addSwatch(Color3.fromHSV(0, 0, val))
+end
+
+-- If the server already assigned a color, reflect it
+local chosen = player:GetAttribute("ChosenColor")
+if typeof(chosen) == "Color3" then
+	selSwatch.BackgroundColor3 = chosen
+end
+
+-- Also listen for server echo (Color3) to update swatch
+colorChoiceRE.OnClientEvent:Connect(function(confirmed)
+	if typeof(confirmed) == "Color3" then
+		selSwatch.BackgroundColor3 = confirmed
+	end
+end)
