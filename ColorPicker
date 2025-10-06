@@ -1,4 +1,5 @@
--- StarterPlayerScripts/ColorPicker (LocalScript) - HSV Picker with Auto-Hide + Reopen Button
+-- StarterPlayerScripts/ColorPicker (LocalScript)
+-- HSV picker with a visible "Done" button to hide the GUI (plus a small 🎨 reopen button)
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -47,7 +48,7 @@ local panel = Instance.new("Frame")
 panel.Name = "HSVPanel"
 panel.AnchorPoint = Vector2.new(1, 1)
 panel.Position = UDim2.new(1, -12, 1, -12)
-panel.Size = UDim2.fromOffset(360, 240)
+panel.Size = UDim2.fromOffset(360, 260) -- a little taller to fit the Done button
 panel.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 panel.BorderSizePixel = 0
 panel.Parent = gui
@@ -70,7 +71,7 @@ title.TextColor3 = Color3.fromRGB(255,255,255)
 title.Size = UDim2.new(1, 0, 0, 24)
 title.Parent = panel
 
--- Selected swatch
+-- Selected swatch row
 local swatchRow = Instance.new("Frame")
 swatchRow.BackgroundTransparency = 1
 swatchRow.Position = UDim2.new(0, 0, 0, 30)
@@ -98,11 +99,11 @@ do
 	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = swatch
 end
 
--- Content area
+-- Content (SV + Hue)
 local content = Instance.new("Frame")
 content.BackgroundTransparency = 1
 content.Position = UDim2.new(0, 0, 0, 64)
-content.Size = UDim2.new(1, 0, 1, -64)
+content.Size = UDim2.new(1, 0, 1, -64 - 38) -- leave room for Done button (≈38px)
 content.Parent = panel
 
 -- SV square
@@ -213,7 +214,8 @@ local function clamp01(x) return math.clamp(x, 0, 1) end
 local function colorNow() return Color3.fromHSV(h, s, v) end
 
 local function applyUIFromHSV()
-	swatch.BackgroundColor3 = colorNow()
+	local c3 = colorNow()
+	swatch.BackgroundColor3 = c3
 	sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
 	local px = s * sv.AbsoluteSize.X
 	local py = (1 - v) * sv.AbsoluteSize.Y
@@ -237,7 +239,7 @@ local function pickHueFromPoint(y)
 	applyUIFromHSV()
 end
 
--- Throttle network sends
+-- Throttle network sends a bit during drags
 local lastSend = 0
 local function maybeSendColor()
 	local t = tick()
@@ -247,24 +249,18 @@ local function maybeSendColor()
 	end
 end
 
--- === Auto-hide controls ===
+-- === Show/Hide ===
 local function showPicker()
 	panel.Visible = true
 	pickerVisible = true
 end
-
 local function hidePicker()
 	panel.Visible = false
 	pickerVisible = false
 end
 
--- Reopen button toggles the panel
 reopenBtn.MouseButton1Click:Connect(function()
-	if pickerVisible then
-		hidePicker()
-	else
-		showPicker()
-	end
+	if pickerVisible then hidePicker() else showPicker() end
 end)
 
 -- === Input wiring ===
@@ -292,35 +288,52 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 	if isDraggingSV or isDraggingH then
 		local pos = UserInputService:GetMouseLocation()
-		if isDraggingSV then
-			pickSVFromPoint(pos.X, pos.Y)
-		else
-			pickHueFromPoint(pos.Y)
-		end
+		if isDraggingSV then pickSVFromPoint(pos.X, pos.Y) else pickHueFromPoint(pos.Y) end
 		maybeSendColor()
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		if isDraggingSV or isDraggingH then
-			isDraggingSV = false
-			isDraggingH = false
-			-- final send and auto-hide the panel
-			ColorChoice:FireServer(colorNow())
-			hidePicker()
-		end
+		isDraggingSV = false
+		isDraggingH = false
+		-- (No auto-hide here; use the Done button)
 	end
 end)
 
--- Initialize from server-assigned color (if any)
+-- === Done button (explicit hide) ===
+local doneBtn = Instance.new("TextButton")
+doneBtn.Name = "DoneButton"
+doneBtn.Text = "Done"
+doneBtn.TextScaled = true
+doneBtn.Font = Enum.Font.GothamBold
+doneBtn.TextColor3 = Color3.fromRGB(255,255,255)
+doneBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+doneBtn.AutoButtonColor = true
+doneBtn.AnchorPoint = Vector2.new(1, 1)
+doneBtn.Position = UDim2.new(1, 0, 1, 0)
+doneBtn.Size = UDim2.fromOffset(86, 30)
+doneBtn.Parent = panel
+do
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 8)
+	c.Parent = doneBtn
+end
+
+doneBtn.MouseButton1Click:Connect(function()
+	-- send final color and hide the panel
+	ColorChoice:FireServer(colorNow())
+	hidePicker()
+end)
+
+-- Initialize from server color (if any)
 local existing = player:GetAttribute("ChosenColor")
 if typeof(existing) == "Color3" then
 	local hh, ss, vv = existing:ToHSV()
 	h, s, v = hh, ss, vv
 end
 
--- Update selected swatch if server echoes a color
+-- Update when server echoes a color
 ColorChoice.OnClientEvent:Connect(function(confirmed)
 	if typeof(confirmed) == "Color3" then
 		local hh, ss, vv = confirmed:ToHSV()
