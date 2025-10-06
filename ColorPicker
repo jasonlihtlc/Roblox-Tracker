@@ -1,5 +1,5 @@
 -- StarterPlayerScripts/ColorPicker (LocalScript)
--- HSV picker with a visible "Done" button to hide the GUI (plus a small 🎨 reopen button)
+-- HSV picker with a "Done" button that DESTROYS the panel. 🎨 button can rebuild it later.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -11,20 +11,27 @@ if not remotes then return end
 local ColorChoice = remotes:WaitForChild("ColorChoice", 60)
 if not ColorChoice then return end
 
--- === State ===
-local h, s, v = 0, 1, 1
-local isDraggingSV = false
-local isDraggingH  = false
-local pickerVisible = true
+-- Remove any old stray UIs with the same names (avoids duplicates)
+do
+	local pg = player:WaitForChild("PlayerGui")
+	for _, ui in ipairs(pg:GetChildren()) do
+		if ui.Name == "ColorPicker" then ui:Destroy() end
+	end
+end
 
--- === GUI Root ===
+-- ======= State =======
+local h, s, v = 0, 1, 1
+local isDraggingSV, isDraggingH = false, false
+local pickerVisible = false
+local currentPanel -- Frame reference (destroyed on Done)
+
+-- ======= GUI ROOT + REOPEN BUTTON =======
 local gui = Instance.new("ScreenGui")
 gui.Name = "ColorPicker"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- === Reopen button (always visible) ===
 local reopenBtn = Instance.new("TextButton")
 reopenBtn.Name = "ReopenColorPicker"
 reopenBtn.Text = "🎨"
@@ -43,303 +50,317 @@ do
 	c.Parent = reopenBtn
 end
 
--- === HSV Panel ===
-local panel = Instance.new("Frame")
-panel.Name = "HSVPanel"
-panel.AnchorPoint = Vector2.new(1, 1)
-panel.Position = UDim2.new(1, -12, 1, -12)
-panel.Size = UDim2.fromOffset(360, 260) -- a little taller to fit the Done button
-panel.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
-panel.BorderSizePixel = 0
-panel.Parent = gui
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = panel
-	local pad = Instance.new("UIPadding")
-	pad.PaddingTop = UDim.new(0, 10)
-	pad.PaddingBottom = UDim.new(0, 10)
-	pad.PaddingLeft = UDim.new(0, 10)
-	pad.PaddingRight = UDim.new(0, 10)
-	pad.Parent = panel
-end
-
-local title = Instance.new("TextLabel")
-title.BackgroundTransparency = 1
-title.Text = "Pick a Color"
-title.TextScaled = true
-title.Font = Enum.Font.GothamBold
-title.TextColor3 = Color3.fromRGB(255,255,255)
-title.Size = UDim2.new(1, 0, 0, 24)
-title.Parent = panel
-
--- Selected swatch row
-local swatchRow = Instance.new("Frame")
-swatchRow.BackgroundTransparency = 1
-swatchRow.Position = UDim2.new(0, 0, 0, 30)
-swatchRow.Size = UDim2.new(1, 0, 0, 28)
-swatchRow.Parent = panel
-
-local swatchLabel = Instance.new("TextLabel")
-swatchLabel.BackgroundTransparency = 1
-swatchLabel.Text = "Selected"
-swatchLabel.TextScaled = true
-swatchLabel.Font = Enum.Font.Gotham
-swatchLabel.TextXAlignment = Enum.TextXAlignment.Left
-swatchLabel.TextColor3 = Color3.fromRGB(220,220,220)
-swatchLabel.Size = UDim2.new(1, -40, 1, 0)
-swatchLabel.Parent = swatchRow
-
-local swatch = Instance.new("Frame")
-swatch.Size = UDim2.fromOffset(28, 28)
-swatch.AnchorPoint = Vector2.new(1, 0.5)
-swatch.Position = UDim2.new(1, 0, 0.5, 0)
-swatch.BackgroundColor3 = Color3.fromHSV(h, s, v)
-swatch.BorderSizePixel = 0
-swatch.Parent = swatchRow
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = swatch
-end
-
--- Content (SV + Hue)
-local content = Instance.new("Frame")
-content.BackgroundTransparency = 1
-content.Position = UDim2.new(0, 0, 0, 64)
-content.Size = UDim2.new(1, 0, 1, -64 - 38) -- leave room for Done button (≈38px)
-content.Parent = panel
-
--- SV square
-local sv = Instance.new("Frame")
-sv.Name = "SV"
-sv.Size = UDim2.fromOffset(260, 160)
-sv.Position = UDim2.new(0, 0, 0, 0)
-sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
-sv.BorderSizePixel = 0
-sv.Parent = content
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = sv
-end
-
--- White overlay (S)
-local whiteOverlay = Instance.new("Frame")
-whiteOverlay.ZIndex = 2
-whiteOverlay.BackgroundColor3 = Color3.new(1,1,1)
-whiteOverlay.BorderSizePixel = 0
-whiteOverlay.Size = UDim2.fromScale(1,1)
-whiteOverlay.Parent = sv
-do
-	local g = Instance.new("UIGradient")
-	g.Rotation = 0
-	g.Transparency = NumberSequence.new{
-		NumberSequenceKeypoint.new(0, 0),  -- left: opaque white
-		NumberSequenceKeypoint.new(1, 1),  -- right: transparent
-	}
-	g.Color = ColorSequence.new(Color3.new(1,1,1), Color3.new(1,1,1))
-	g.Parent = whiteOverlay
-end
-
--- Black overlay (V)
-local blackOverlay = Instance.new("Frame")
-blackOverlay.ZIndex = 3
-blackOverlay.BackgroundColor3 = Color3.new(0,0,0)
-blackOverlay.BorderSizePixel = 0
-blackOverlay.Size = UDim2.fromScale(1,1)
-blackOverlay.Parent = sv
-do
-	local g = Instance.new("UIGradient")
-	g.Rotation = 90
-	g.Transparency = NumberSequence.new{
-		NumberSequenceKeypoint.new(0, 1),  -- top: transparent
-		NumberSequenceKeypoint.new(1, 0),  -- bottom: opaque black
-	}
-	g.Color = ColorSequence.new(Color3.new(0,0,0), Color3.new(0,0,0))
-	g.Parent = blackOverlay
-end
-
--- SV cursor
-local svCursor = Instance.new("Frame")
-svCursor.ZIndex = 4
-svCursor.Size = UDim2.fromOffset(12, 12)
-svCursor.AnchorPoint = Vector2.new(0.5, 0.5)
-svCursor.BackgroundColor3 = Color3.fromRGB(255,255,255)
-svCursor.BorderSizePixel = 0
-svCursor.Parent = sv
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = svCursor
-	local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(0,0,0); stroke.Thickness = 1.5; stroke.Parent = svCursor
-end
-
--- Hue bar
-local hueBar = Instance.new("Frame")
-hueBar.Name = "Hue"
-hueBar.Size = UDim2.fromOffset(24, sv.AbsoluteSize.Y)
-hueBar.Position = UDim2.new(0, sv.Size.X.Offset + 12, 0, 0)
-hueBar.BackgroundColor3 = Color3.new(1,1,1)
-hueBar.BorderSizePixel = 0
-hueBar.Parent = content
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = hueBar
-	local g = Instance.new("UIGradient"); g.Rotation = 90
-	g.Color = ColorSequence.new{
-		ColorSequenceKeypoint.new(0.00, Color3.fromHSV(0/6,1,1)),
-		ColorSequenceKeypoint.new(0.17, Color3.fromHSV(1/6,1,1)),
-		ColorSequenceKeypoint.new(0.33, Color3.fromHSV(2/6,1,1)),
-		ColorSequenceKeypoint.new(0.50, Color3.fromHSV(3/6,1,1)),
-		ColorSequenceKeypoint.new(0.67, Color3.fromHSV(4/6,1,1)),
-		ColorSequenceKeypoint.new(0.83, Color3.fromHSV(5/6,1,1)),
-		ColorSequenceKeypoint.new(1.00, Color3.fromHSV(1,1,1)),
-	}
-	g.Parent = hueBar
-end
-
--- Hue cursor
-local hueCursor = Instance.new("Frame")
-hueCursor.ZIndex = 2
-hueCursor.Size = UDim2.fromOffset(hueBar.Size.X.Offset + 6, 4)
-hueCursor.AnchorPoint = Vector2.new(0.5, 0.5)
-hueCursor.BackgroundColor3 = Color3.fromRGB(255,255,255)
-hueCursor.BorderSizePixel = 0
-hueCursor.Parent = content
-do
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = hueCursor
-	local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(0,0,0); stroke.Thickness = 1; stroke.Parent = hueCursor
-end
-
-task.defer(function()
-	hueBar.Size = UDim2.fromOffset(24, sv.AbsoluteSize.Y)
-	hueBar.Position = UDim2.new(0, sv.Size.X.Offset + 12, 0, 0)
-	hueCursor.Position = UDim2.new(0, sv.Size.X.Offset + 12 + hueBar.Size.X.Offset/2, 0, 0)
-end)
-
--- === Helpers ===
+-- ======= Helpers =======
 local function clamp01(x) return math.clamp(x, 0, 1) end
 local function colorNow() return Color3.fromHSV(h, s, v) end
 
-local function applyUIFromHSV()
-	local c3 = colorNow()
-	swatch.BackgroundColor3 = c3
-	sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
-	local px = s * sv.AbsoluteSize.X
-	local py = (1 - v) * sv.AbsoluteSize.Y
-	svCursor.Position = UDim2.fromOffset(px, py)
-	local hy = h * hueBar.AbsoluteSize.Y
-	hueCursor.Position = UDim2.new(0, sv.Size.X.Offset + 12 + hueBar.Size.X.Offset/2, 0, hy)
-end
-
-local function pickSVFromPoint(x, y)
-	local rel = sv.AbsolutePosition
-	local w, hgt = sv.AbsoluteSize.X, sv.AbsoluteSize.Y
-	s = clamp01((x - rel.X) / w)
-	v = 1 - clamp01((y - rel.Y) / hgt)
-	applyUIFromHSV()
-end
-
-local function pickHueFromPoint(y)
-	local relY = hueBar.AbsolutePosition.Y
-	local hgt = hueBar.AbsoluteSize.Y
-	h = clamp01((y - relY) / hgt)
-	applyUIFromHSV()
-end
-
--- Throttle network sends a bit during drags
-local lastSend = 0
-local function maybeSendColor()
-	local t = tick()
-	if t - lastSend >= 0.08 then
-		lastSend = t
-		ColorChoice:FireServer(colorNow())
-	end
-end
-
--- === Show/Hide ===
-local function showPicker()
-	panel.Visible = true
-	pickerVisible = true
-end
-local function hidePicker()
-	panel.Visible = false
-	pickerVisible = false
-end
-
-reopenBtn.MouseButton1Click:Connect(function()
-	if pickerVisible then hidePicker() else showPicker() end
-end)
-
--- === Input wiring ===
-sv.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		isDraggingSV = true
-		local pos = UserInputService:GetMouseLocation()
-		pickSVFromPoint(pos.X, pos.Y)
-		maybeSendColor()
-	end
-end)
-
-hueBar.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		isDraggingH = true
-		local pos = UserInputService:GetMouseLocation()
-		pickHueFromPoint(pos.Y)
-		maybeSendColor()
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
-		return
-	end
-	if isDraggingSV or isDraggingH then
-		local pos = UserInputService:GetMouseLocation()
-		if isDraggingSV then pickSVFromPoint(pos.X, pos.Y) else pickHueFromPoint(pos.Y) end
-		maybeSendColor()
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		isDraggingSV = false
-		isDraggingH = false
-		-- (No auto-hide here; use the Done button)
-	end
-end)
-
--- === Done button (explicit hide) ===
-local doneBtn = Instance.new("TextButton")
-doneBtn.Name = "DoneButton"
-doneBtn.Text = "Done"
-doneBtn.TextScaled = true
-doneBtn.Font = Enum.Font.GothamBold
-doneBtn.TextColor3 = Color3.fromRGB(255,255,255)
-doneBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-doneBtn.AutoButtonColor = true
-doneBtn.AnchorPoint = Vector2.new(1, 1)
-doneBtn.Position = UDim2.new(1, 0, 1, 0)
-doneBtn.Size = UDim2.fromOffset(86, 30)
-doneBtn.Parent = panel
-do
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 8)
-	c.Parent = doneBtn
-end
-
-doneBtn.MouseButton1Click:Connect(function()
-	-- send final color and hide the panel
-	ColorChoice:FireServer(colorNow())
-	hidePicker()
-end)
-
--- Initialize from server color (if any)
-local existing = player:GetAttribute("ChosenColor")
-if typeof(existing) == "Color3" then
-	local hh, ss, vv = existing:ToHSV()
+local function applyHSVFromColor3(c)
+	local hh, ss, vv = c:ToHSV()
 	h, s, v = hh, ss, vv
 end
 
--- Update when server echoes a color
-ColorChoice.OnClientEvent:Connect(function(confirmed)
-	if typeof(confirmed) == "Color3" then
-		local hh, ss, vv = confirmed:ToHSV()
-		h, s, v = hh, ss, vv
+-- Build the HSV panel fresh each time
+local function buildPickerPanel()
+	if currentPanel then currentPanel:Destroy() end
+
+	local panel = Instance.new("Frame")
+	panel.Name = "HSVPanel"
+	panel.AnchorPoint = Vector2.new(1, 1)
+	panel.Position = UDim2.new(1, -12, 1, -12)
+	panel.Size = UDim2.fromOffset(360, 260)
+	panel.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+	panel.BorderSizePixel = 0
+	panel.Parent = gui
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = panel
+		local pad = Instance.new("UIPadding")
+		pad.PaddingTop = UDim.new(0, 10)
+		pad.PaddingBottom = UDim.new(0, 10)
+		pad.PaddingLeft = UDim.new(0, 10)
+		pad.PaddingRight = UDim.new(0, 10)
+		pad.Parent = panel
+	end
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Text = "Pick a Color"
+	title.TextScaled = true
+	title.Font = Enum.Font.GothamBold
+	title.TextColor3 = Color3.fromRGB(255,255,255)
+	title.Size = UDim2.new(1, 0, 0, 24)
+	title.Parent = panel
+
+	-- Selected swatch row
+	local swatchRow = Instance.new("Frame")
+	swatchRow.BackgroundTransparency = 1
+	swatchRow.Position = UDim2.new(0, 0, 0, 30)
+	swatchRow.Size = UDim2.new(1, 0, 0, 28)
+	swatchRow.Parent = panel
+
+	local swatchLabel = Instance.new("TextLabel")
+	swatchLabel.BackgroundTransparency = 1
+	swatchLabel.Text = "Selected"
+	swatchLabel.TextScaled = true
+	swatchLabel.Font = Enum.Font.Gotham
+	swatchLabel.TextXAlignment = Enum.TextXAlignment.Left
+	swatchLabel.TextColor3 = Color3.fromRGB(220,220,220)
+	swatchLabel.Size = UDim2.new(1, -40, 1, 0)
+	swatchLabel.Parent = swatchRow
+
+	local swatch = Instance.new("Frame")
+	swatch.Size = UDim2.fromOffset(28, 28)
+	swatch.AnchorPoint = Vector2.new(1, 0.5)
+	swatch.Position = UDim2.new(1, 0, 0.5, 0)
+	swatch.BackgroundColor3 = colorNow()
+	swatch.BorderSizePixel = 0
+	swatch.Parent = swatchRow
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = swatch
+	end
+
+	-- Content (SV + Hue)
+	local content = Instance.new("Frame")
+	content.BackgroundTransparency = 1
+	content.Position = UDim2.new(0, 0, 0, 64)
+	content.Size = UDim2.new(1, 0, 1, -64 - 38) -- space for Done
+	content.Parent = panel
+
+	-- SV square
+	local sv = Instance.new("Frame")
+	sv.Name = "SV"
+	sv.Size = UDim2.fromOffset(260, 160)
+	sv.Position = UDim2.new(0, 0, 0, 0)
+	sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+	sv.BorderSizePixel = 0
+	sv.Parent = content
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = sv
+	end
+
+	-- White overlay (S)
+	local whiteOverlay = Instance.new("Frame")
+	whiteOverlay.ZIndex = 2
+	whiteOverlay.BackgroundColor3 = Color3.new(1,1,1)
+	whiteOverlay.BorderSizePixel = 0
+	whiteOverlay.Size = UDim2.fromScale(1,1)
+	whiteOverlay.Parent = sv
+	do
+		local g = Instance.new("UIGradient")
+		g.Rotation = 0
+		g.Transparency = NumberSequence.new{
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(1, 1),
+		}
+		g.Color = ColorSequence.new(Color3.new(1,1,1), Color3.new(1,1,1))
+		g.Parent = whiteOverlay
+	end
+
+	-- Black overlay (V)
+	local blackOverlay = Instance.new("Frame")
+	blackOverlay.ZIndex = 3
+	blackOverlay.BackgroundColor3 = Color3.new(0,0,0)
+	blackOverlay.BorderSizePixel = 0
+	blackOverlay.Size = UDim2.fromScale(1,1)
+	blackOverlay.Parent = sv
+	do
+		local g = Instance.new("UIGradient")
+		g.Rotation = 90
+		g.Transparency = NumberSequence.new{
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(1, 0),
+		}
+		g.Color = ColorSequence.new(Color3.new(0,0,0), Color3.new(0,0,0))
+		g.Parent = blackOverlay
+	end
+
+	local svCursor = Instance.new("Frame")
+	svCursor.ZIndex = 4
+	svCursor.Size = UDim2.fromOffset(12, 12)
+	svCursor.AnchorPoint = Vector2.new(0.5, 0.5)
+	svCursor.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	svCursor.BorderSizePixel = 0
+	svCursor.Parent = sv
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = svCursor
+		local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(0,0,0); stroke.Thickness = 1.5; stroke.Parent = svCursor
+	end
+
+	-- Hue bar
+	local hueBar = Instance.new("Frame")
+	hueBar.Name = "Hue"
+	hueBar.Size = UDim2.fromOffset(24, sv.AbsoluteSize.Y)
+	hueBar.Position = UDim2.new(0, sv.Size.X.Offset + 12, 0, 0)
+	hueBar.BackgroundColor3 = Color3.new(1,1,1)
+	hueBar.BorderSizePixel = 0
+	hueBar.Parent = content
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = hueBar
+		local g = Instance.new("UIGradient"); g.Rotation = 90
+		g.Color = ColorSequence.new{
+			ColorSequenceKeypoint.new(0.00, Color3.fromHSV(0/6,1,1)),
+			ColorSequenceKeypoint.new(0.17, Color3.fromHSV(1/6,1,1)),
+			ColorSequenceKeypoint.new(0.33, Color3.fromHSV(2/6,1,1)),
+			ColorSequenceKeypoint.new(0.50, Color3.fromHSV(3/6,1,1)),
+			ColorSequenceKeypoint.new(0.67, Color3.fromHSV(4/6,1,1)),
+			ColorSequenceKeypoint.new(0.83, Color3.fromHSV(5/6,1,1)),
+			ColorSequenceKeypoint.new(1.00, Color3.fromHSV(1,1,1)),
+		}
+		g.Parent = hueBar
+	end
+
+	local hueCursor = Instance.new("Frame")
+	hueCursor.ZIndex = 2
+	hueCursor.Size = UDim2.fromOffset(hueBar.Size.X.Offset + 6, 4)
+	hueCursor.AnchorPoint = Vector2.new(0.5, 0.5)
+	hueCursor.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	hueCursor.BorderSizePixel = 0
+	hueCursor.Parent = content
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = hueCursor
+		local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(0,0,0); stroke.Thickness = 1; stroke.Parent = hueCursor
+	end
+
+	task.defer(function()
+		hueBar.Size = UDim2.fromOffset(24, sv.AbsoluteSize.Y)
+		hueBar.Position = UDim2.new(0, sv.Size.X.Offset + 12, 0, 0)
+		hueCursor.Position = UDim2.new(0, sv.Size.X.Offset + 12 + hueBar.Size.X.Offset/2, 0, 0)
+	end)
+
+	-- ==== Local helpers (need closures over sv, hueBar, etc.) ====
+	local function applyUIFromHSV()
+		local c3 = colorNow()
+		swatch.BackgroundColor3 = c3
+		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+		local px = s * sv.AbsoluteSize.X
+		local py = (1 - v) * sv.AbsoluteSize.Y
+		svCursor.Position = UDim2.fromOffset(px, py)
+		local hy = h * hueBar.AbsoluteSize.Y
+		hueCursor.Position = UDim2.new(0, sv.Size.X.Offset + 12 + hueBar.Size.X.Offset/2, 0, hy)
+	end
+
+	local function pickSVFromPoint(x, y)
+		local rel = sv.AbsolutePosition
+		local w, hgt = sv.AbsoluteSize.X, sv.AbsoluteSize.Y
+		s = clamp01((x - rel.X) / w)
+		v = 1 - clamp01((y - rel.Y) / hgt)
 		applyUIFromHSV()
+	end
+
+	local function pickHueFromPoint(yPos)
+		local relY = hueBar.AbsolutePosition.Y
+		local hgt = hueBar.AbsoluteSize.Y
+		h = clamp01((yPos - relY) / hgt)
+		applyUIFromHSV()
+	end
+
+	-- Slight throttle during drags
+	local lastSend = 0
+	local function maybeSendColor()
+		local t = tick()
+		if t - lastSend >= 0.08 then
+			lastSend = t
+			ColorChoice:FireServer(colorNow())
+		end
+	end
+
+	-- Input handlers
+	sv.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDraggingSV = true
+			local pos = UserInputService:GetMouseLocation()
+			pickSVFromPoint(pos.X, pos.Y)
+			maybeSendColor()
+		end
+	end)
+	hueBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDraggingH = true
+			local pos = UserInputService:GetMouseLocation()
+			pickHueFromPoint(pos.Y)
+			maybeSendColor()
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if isDraggingSV or isDraggingH then
+			local pos = UserInputService:GetMouseLocation()
+			if isDraggingSV then pickSVFromPoint(pos.X, pos.Y) else pickHueFromPoint(pos.Y) end
+			maybeSendColor()
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDraggingSV = false
+			isDraggingH = false
+		end
+	end)
+
+	-- DONE button — DESTROY the panel (no lingering UI)
+	local doneBtn = Instance.new("TextButton")
+	doneBtn.Name = "DoneButton"
+	doneBtn.Text = "Done"
+	doneBtn.TextScaled = true
+	doneBtn.Font = Enum.Font.GothamBold
+	doneBtn.TextColor3 = Color3.fromRGB(255,255,255)
+	doneBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+	doneBtn.AutoButtonColor = true
+	doneBtn.AnchorPoint = Vector2.new(1, 1)
+	doneBtn.Position = UDim2.new(1, 0, 1, 0)
+	doneBtn.Size = UDim2.fromOffset(86, 30)
+	doneBtn.Parent = panel
+	do
+		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = doneBtn
+	end
+
+	doneBtn.MouseButton1Click:Connect(function()
+		ColorChoice:FireServer(colorNow()) -- final send
+		if currentPanel then
+			currentPanel:Destroy()
+			currentPanel = nil
+		else
+			panel:Destroy()
+		end
+		pickerVisible = false
+	end)
+
+	-- reflect existing color
+	local existing = player:GetAttribute("ChosenColor")
+	if typeof(existing) == "Color3" then
+		applyHSVFromColor3(existing)
+	end
+	applyUIFromHSV()
+
+	currentPanel = panel
+	pickerVisible = true
+end
+
+-- Reopen button toggles (rebuilds if missing)
+reopenBtn.MouseButton1Click:Connect(function()
+	if pickerVisible and currentPanel then
+		currentPanel:Destroy()
+		currentPanel = nil
+		pickerVisible = false
+	else
+		buildPickerPanel()
 	end
 end)
 
-applyUIFromHSV()
+-- Also update if server echoes a color
+ColorChoice.OnClientEvent:Connect(function(confirmed)
+	if typeof(confirmed) == "Color3" then
+		applyHSVFromColor3(confirmed)
+		if currentPanel then
+			-- If open, reflect the new color in UI
+			local _ = 0 -- no-op; UI redraw happens inside builder via closures
+		end
+	end
+end)
+
+-- Initialize from server color (if any), then show picker once on first spawn
+local existing = player:GetAttribute("ChosenColor")
+if typeof(existing) == "Color3" then
+	applyHSVFromColor3(existing)
+end
+buildPickerPanel()
