@@ -1,0 +1,288 @@
+-- ServerScriptService/GameManager
+
+--== Services ==--
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+--== Config ==--
+local ROUND_DURATION = 30
+local INTERMISSION = 5
+local DEFAULT_TILE_COLOR = Color3.fromRGB(80, 80, 80)
+local TILE_MATERIAL = Enum.Material.Neon
+local LIGHT_BRIGHTNESS = 2
+local LIGHT_RANGE = 12
+
+-- Optional legacy names that still work if sent as strings
+local COLOR_OPTIONS = {
+	Red   = Color3.fromRGB(255, 75, 75),
+	Blue  = Color3.fromRGB(65, 140, 255),
+	Green = Color3.fromRGB(70, 215, 80),
+}
+
+--== Remotes ==--
+local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes") or Instance.new("Folder")
+remotesFolder.Name = "Remotes"
+remotesFolder.Parent = ReplicatedStorage
+
+local ColorChoice = remotesFolder:FindFirstChild("ColorChoice") or Instance.new("RemoteEvent")
+ColorChoice.Name = "ColorChoice"
+ColorChoice.Parent = remotesFolder
+
+local Announce = remotesFolder:FindFirstChild("Announce") or Instance.new("RemoteEvent")
+Announce.Name = "Announce"
+Announce.Parent = remotesFolder
+
+local function announce(text, color)
+	Announce:FireAllClients(text, color)
+end
+
+--== Tiles ==--
+local tilesFolder = workspace:WaitForChild("FloorBlocks")
+local touchConnections = {}
+local overlapConn = nil
+
+--== Helpers ==--
+local function getDefaultColorFor(player)
+	local list = {Color3.fromRGB(255,75,75), Color3.fromRGB(65,140,255), Color3.fromRGB(70,215,80)}
+	return list[(math.abs(player.UserId) % #list) + 1]
+end
+
+local function getPlayerColor(player)
+	return player:GetAttribute("ChosenColor") or getDefaultColorFor(player)
+end
+
+-- Accept color from clients: string name OR Color3 value
+ColorChoice.OnServerEvent:Connect(function(player, colorPayload)
+	local picked : Color3? = nil
+	if typeof(colorPayload) == "Color3" then
+		picked = colorPayload
+	elseif typeof(colorPayload) == "string" then
+		picked = COLOR_OPTIONS[colorPayload]
+	end
+
+	if picked then
+		player:SetAttribute("ChosenColor", picked)
+		announce(player.Name .. " updated their color.", picked)
+		ColorChoice:FireClient(player, picked) -- echo back (client can update swatch)
+	end
+end)
+
+-- Lights / visuals
+local function ensureLight(part)
+	local light = part:FindFirstChildOfClass("PointLight")
+	if not light then
+		light = Instance.new("PointLight")
+		light.Name = "Glow"
+		light.Brightness = LIGHT_BRIGHTNESS
+		light.Range = LIGHT_RANGE
+		light.Enabled = false
+		light.Parent = part
+	end
+	return light
+end
+
+local function resetTile(part)
+	if not part or not part:IsA("BasePart") then return end
+	part.Color = DEFAULT_TILE_COLOR
+	part.Material = TILE_MATERIAL
+	part:SetAttribute("OwnerUserId", nil)
+	ensureLight(part).Enabled = false
+end
+
+local function claimTile(part, player)
+	if not (part and part:IsA("BasePart") and player) then return end
+	if part:GetAttribute("OwnerUserId") == player.UserId then return end
+	local color = getPlayerColor(player)
+	part.Color = color
+	part.Material = TILE_MATERIAL
+	part:SetAttribute("OwnerUserId", player.UserId)
+	local light = ensureLight(part)
+	light.Color = color
+	light.Enabled = true
+end
+
+local function resetAllTiles()
+	for _, inst in ipairs(tilesFolder:GetDescendants()) do
+		if inst:IsA("BasePart") then
+			inst.Anchored = true
+			inst.CanCollide = true
+			inst.CanTouch = true
+			inst.CanQuery = true
+			resetTile(inst)
+		end
+	end
+end
+
+-- Touch detection
+local function disconnectTouches()
+	for part, conn in pairs(touchConnections) do
+		if conn and conn.Disconnect then conn:Disconnect() end
+		touchConnections[part] = nil
+	end
+end
+
+local function connectTouches()
+	disconnectTouches()
+	for _, inst in ipairs(tilesFolder:GetDescendants()) do
+		if inst:IsA("BasePart") then
+			inst.Anchored = true
+			inst.CanCollide = true
+			inst.CanTouch = true
+			inst.CanQuery = true
+			touchConnections[inst] = inst.Touched:Connect(function(otherPart)
+				local model = otherPart and otherPart:FindFirstAncestorOfClass("Model")
+				if not model then return end
+				local hum = model:FindFirstChildOfClass("Humanoid")
+				if not hum or hum.Health <= 0 then return end
+				local plr = Players:GetPlayerFromCharacter(model)
+				if not plr then return end
+				claimTile(inst, plr)
+			end)
+		end
+	end
+end
+
+-- Overlap fallback
+local overlapParams = OverlapParams.new()
+overlapParams.FilterType = Enum.RaycastFilterType.Whitelist
+overlapParams.FilterDescendantsInstances = { tilesFolder }
+local OVERLAP_BOX_SIZE = Vector3.new(5, 6, 5)
+local OVERLAP_STEP = 0.1
+
+local function stepOverlapAllPlayers()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local char = plr.Character
+		if not char then continue end
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if not (hrp and hum and hum.Health > 0) then continue end
+		local center = hrp.CFrame * CFrame.new(0, -3, 0)
+		local parts = Workspace:GetPartBoundsInBox(center, OVERLAP_BOX_SIZE, overlapParams)
+		for _, p in ipairs(parts) do
+			if p:IsA("BasePart") and p:IsDescendantOf(tilesFolder) then
+				claimTile(p, plr)
+			end
+		end
+	end
+end
+
+local function startOverlap()
+	if overlapConn and overlapConn.Connected then overlapConn:Disconnect() end
+	local acc = 0
+	overlapConn = RunService.Heartbeat:Connect(function(dt)
+		acc += dt
+		if acc >= OVERLAP_STEP then
+			acc = 0
+			stepOverlapAllPlayers()
+		end
+	end)
+end
+
+local function stopOverlap()
+	if overlapConn and overlapConn.Connected then overlapConn:Disconnect() end
+	overlapConn = nil
+end
+
+-- Basic defaults
+Players.PlayerAdded:Connect(function(plr)
+	if not plr:GetAttribute("ChosenColor") then
+		plr:SetAttribute("ChosenColor", getDefaultColorFor(plr))
+	end
+end)
+for _, plr in ipairs(Players:GetPlayers()) do
+	if not plr:GetAttribute("ChosenColor") then
+		plr:SetAttribute("ChosenColor", getDefaultColorFor(plr))
+	end
+end
+
+-- Optional: quick server-side floor generator if folder is empty
+local function countTileParts()
+	local n = 0
+	for _, inst in ipairs(tilesFolder:GetDescendants()) do
+		if inst:IsA("BasePart") then n += 1 end
+	end
+	return n
+end
+local function generateTestFloorIfEmpty()
+	if countTileParts() > 0 then return end
+	local size = Vector3.new(8,1,8)
+	local rows, cols = 6, 6
+	local start = Vector3.new(0,2,0)
+	for r = 1, rows do
+		for c = 1, cols do
+			local p = Instance.new("Part")
+			p.Size = size
+			p.Anchored = true
+			p.CanCollide = true
+			p.CanTouch = true
+			p.Material = TILE_MATERIAL
+			p.Color = DEFAULT_TILE_COLOR
+			p.Name = ("Tile_%d_%d"):format(r, c)
+			local offset = Vector3.new((c - (cols+1)/2) * size.X, 0, (r - (rows+1)/2) * size.Z)
+			p.CFrame = CFrame.new(start + offset)
+			p.Parent = tilesFolder
+		end
+	end
+end
+
+-- Main loop
+task.spawn(function()
+	while true do
+		resetAllTiles()
+		generateTestFloorIfEmpty()
+		announce(("New round starting in %ds. Pick any color!"):format(INTERMISSION))
+		task.wait(INTERMISSION)
+
+		announce(("Round started! You have %d seconds. Paint tiles!"):format(ROUND_DURATION), Color3.fromRGB(0,255,0))
+		connectTouches()
+		startOverlap()
+
+		for t = ROUND_DURATION, 1, -1 do
+			if t == 20 or t == 10 or t <= 5 then
+				announce(t .. "s remaining…", Color3.fromRGB(255,255,0))
+			end
+			task.wait(1)
+		end
+
+		disconnectTouches()
+		stopOverlap()
+
+		-- tally
+		local scores = {}
+		for _, inst in ipairs(tilesFolder:GetDescendants()) do
+			if inst:IsA("BasePart") then
+				local uid = inst:GetAttribute("OwnerUserId")
+				if uid then
+					scores[uid] = (scores[uid] or 0) + 1
+				end
+			end
+		end
+
+		if next(scores) == nil then
+			announce("Time! No tiles claimed. It’s a tie!")
+		else
+			local best, winners = -1, {}
+			for uid, count in pairs(scores) do
+				if count > best then best = count; winners = {uid}
+				elseif count == best then table.insert(winners, uid) end
+			end
+			if #winners == 1 then
+				local uid = winners[1]
+				local p = Players:GetPlayerByUserId(uid)
+				local name = p and p.Name or ("UserId " .. tostring(uid))
+				announce(("Time! Winner: %s with %d tiles! 🏆"):format(name, best))
+			else
+				local names = {}
+				for _, uid in ipairs(winners) do
+					local p = Players:GetPlayerByUserId(uid)
+					table.insert(names, p and p.Name or ("UserId " .. tostring(uid)))
+				end
+				announce(("Time! Tie between %s with %d tiles each!"):format(table.concat(names, ", "), best))
+			end
+		end
+
+		task.wait(3)
+	end
+end)
